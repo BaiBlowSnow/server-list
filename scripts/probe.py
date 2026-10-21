@@ -4,28 +4,34 @@
 # spurious failures, pruning of long-gone addresses).
 
 import argparse
+import functools
 import html
+import ipaddress
 import json
 import random
+import socket
 import statistics
 import subprocess
 import sys
 import time
 import tomllib
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 PROTO_XASH = 49
 PROTO_GOLDSRC = 48
-BATCH_SIZE = 5
+VALID_PROTOCOLS = (PROTO_XASH, PROTO_GOLDSRC)
+BATCH_SIZE = 30
 STATE_PRUNE_HOURS = 30 * 24
 HOUR_WINDOW_HOURS = 14 * 24
 WEEKDAY_WINDOW_HOURS = 6 * 7 * 24
 SAMPLE_RETAIN_HOURS = WEEKDAY_WINDOW_HOURS
 
-def probe_batch(query_bin, addresses, timeout):
-	# use one query invocation for multiple addresses
-	cmd = [query_bin, "info", *addresses, "-j", "-c", "-P", "-t", str(int(timeout))]
+def probe_batch(query_bin, addresses, timeout, protocol):
+	# use one query invocation for multiple addresses, all on one protocol
+	cmd = [query_bin, "info", *addresses, "-j", "-c", "-P",
+		"-t", str(int(timeout)), "--protocol", str(protocol)]
 
 	try:
 		out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 5)
@@ -43,18 +49,29 @@ def probe_batch(query_bin, addresses, timeout):
 	live = {}
 	for server in doc.get("servers") or []:
 		address = server.get("address")
-		if address and server.get("status") == "ok":
-			live[address] = server
+		if not address or server.get("status") != "ok":
+			continue
+		# the declared protocol is the contract: a server that answers on
+		# anything else is not the server this entry describes. Keep the
+		# response around so callers can say so, but mark it unusable.
+		live[address] = server if server.get("protocol") == protocol else {"wrong_protocol": server.get("protocol")}
 	return live
 
-def probe_all(query_bin, addresses, timeout):
-	# probe every address in shuffled batches
-	pending = list(addresses)
+def probe_all(query_bin, targets, timeout):
+	# targets: iterable of (address, protocol). Each protocol is queried
+	# separately, so a dual-stack server cannot race its two replies.
+	pending = list(targets)
 	random.shuffle(pending)
+	by_proto = {}
+	for address, protocol in pending:
+		by_proto.setdefault(int(protocol), []).append(address)
+
 	results = {}
-	for start in range(0, len(pending), BATCH_SIZE):
-		batch = pending[start:start + BATCH_SIZE]
-		results.update(probe_batch(query_bin, batch, timeout))
+	for protocol, addresses in by_proto.items():
+		for start in range(0, len(addresses), BATCH_SIZE):
+			batch = addresses[start:start + BATCH_SIZE]
+			for address, server in probe_batch(query_bin, batch, timeout, protocol).items():
+				results[(address, protocol)] = server
 	return results
 
 def load_sources(servers_dir):
@@ -247,6 +264,191 @@ def hours_since(iso, now):
 		dt = dt.replace(tzinfo=timezone.utc)
 	return (now - dt).total_seconds() / 3600.0
 
+def parse_protocol(raw):
+	# the declared protocol, or None when it isn't one we can probe with
+	if raw is None:
+		return PROTO_XASH
+	try:
+		value = int(raw)
+	except (TypeError, ValueError):
+		return None
+	return value if value in VALID_PROTOCOLS else None
+
+def split_hostport(address):
+	# "1.2.3.4:27015", "example.com:27015" or "[2001:db8::1]:27015"
+	if not isinstance(address, str):
+		return None
+	rest, sep, port = address.rpartition(":")
+	if not sep or not port.isdigit() or not 0 < int(port) < 65536:
+		return None
+	host = rest[1:-1] if rest.startswith("[") and rest.endswith("]") else rest
+	return host or None
+
+def is_public(ip):
+	# is_global already excludes RFC1918, loopback, link-local, CGNAT, ULA,
+	# the documentation and benchmark ranges, and IPv4-mapped v6 — but it
+	# considers multicast global, which we never want to send a query to
+	return ip.is_global and not ip.is_multicast
+
+@functools.lru_cache(maxsize=None)
+def resolve_host(host):
+	"""Every IP a host maps to; the literal itself when it is already an IP."""
+	try:
+		return (ipaddress.ip_address(host),)
+	except ValueError:
+		pass
+	try:
+		infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_UDP)
+	except (socket.gaierror, UnicodeError):
+		return ()
+	return tuple(ipaddress.ip_address(info[4][0]) for info in infos)
+
+def address_rejection(address):
+	"""Why an address must not be probed or published, or None when it's fine.
+
+	Keeps entries from pointing the prober at a private network. That matters
+	most for PR validation, where the address is attacker-controlled and the
+	probe result is echoed into a public comment.
+	"""
+	host = split_hostport(address)
+	if host is None:
+		return "not a valid `host:port`"
+
+	ips = resolve_host(host)
+	if not ips:
+		# unresolvable today is not necessarily wrong: DNS may just be down,
+		# and the probe reports it as unreachable anyway
+		return None
+
+	bad = sorted({str(ip) for ip in ips if not is_public(ip)})
+	if bad:
+		return f"resolves to a non-public address ({', '.join(bad)})"
+	return None
+
+def build_targets(sources):
+	targets = set()
+	for entries in sources.values():
+		for entry in entries:
+			protocol = parse_protocol(entry.get("protocol"))
+			if entry.get("address") and protocol is not None and not address_rejection(entry["address"]):
+				targets.add((entry["address"], protocol))
+	return sorted(targets)
+
+@dataclass
+class Decision:
+	"""What happens to one entry this run, and the line explaining it."""
+	log: str
+	publish: tuple = None  # (address, protocol) to publish, or None
+	live: bool = False
+	grace: bool = False
+	players: int = 0
+	ping: float = None
+
+def classify(gamedir, entry, protocol, result, prev, now, grace_hours):
+	address = entry["address"]
+
+	# answered, but not on the protocol this entry declares: not our server
+	wrong_proto = result.get("wrong_protocol") if result else None
+	if wrong_proto is not None:
+		result = None
+
+	if result is not None:
+		# a1ba: we publish the IP, not the hostname
+		# until engine uses blocking NET_StringToAdr
+		# which is entirely my bug, lol
+		pub = result.get("resolved") or address
+		# re-check what it actually resolved to: a name that looked public when
+		# we built the target list can point somewhere private by query time
+		rejection = address_rejection(pub)
+		if rejection:
+			return Decision(log=f"  [!] {gamedir:>12}  {address} -> {pub}  {rejection}, not published")
+		seen = f"{address} -> {pub}" if pub != address else address
+		players = int(result.get("numcl") or 0)
+		ping = result.get("ping")
+		return Decision(
+			log=f"  [+] {gamedir:>12}  {seen}  ping={ping}ms  players={players}",
+			publish=(pub, protocol), live=True, players=players, ping=ping)
+
+	age = hours_since(prev.get("last_seen"), now)
+
+	if age <= grace_hours:
+		return Decision(
+			log=f"  [~] {gamedir:>12}  {address}  silent now, last seen {age:.1f}h ago (grace)",
+			publish=(address, protocol), grace=True)
+
+	why = f"answers protocol {wrong_proto}, not {protocol}" if wrong_proto is not None else "silent"
+	seen_note = f" (last seen {age:.1f}h ago)" if prev.get("last_seen") else ""
+	return Decision(log=f"  [-] {gamedir:>12}  {address}  {why}{seen_note}")
+
+def probe_gamedir(gamedir, entries, gd_state, results, now, now_iso, grace_hours):
+	"""Returns the addresses to publish, plus this gamedir's live tallies."""
+	live_addrs, players, responding, grace_kept = [], 0, 0, 0
+
+	for entry in entries:
+		address = entry.get("address")
+		if not address:
+			continue
+		protocol = parse_protocol(entry.get("protocol"))
+		if protocol is None:
+			print(f"  [!] {gamedir:>12}  {address}  invalid protocol {entry.get('protocol')!r}, skipped", flush=True)
+			continue
+
+		# checked before grace can put it back in the list
+		rejection = address_rejection(address)
+		if rejection:
+			print(f"  [!] {gamedir:>12}  {address}  {rejection}, skipped", flush=True)
+			continue
+
+		prev = gd_state.setdefault(address, {})
+		prev["last_attempt"] = now_iso
+
+		d = classify(gamedir, entry, protocol, results.get((address, protocol)), prev, now, grace_hours)
+		if d.live:
+			prev["last_seen"] = now_iso
+			prev["last_ping_ms"] = d.ping
+			players += d.players
+			responding += 1
+		if d.grace:
+			grace_kept += 1
+		if d.publish:
+			live_addrs.append(d.publish)
+		print(d.log, flush=True)
+
+	live_addrs.sort()
+	return live_addrs, players, responding, grace_kept
+
+def prune_state(state, sources, now):
+	"""Forget addresses that left the sources and have stayed silent for a month."""
+	source_addrs = {gd: {e["address"] for e in entries if e.get("address")}
+		for gd, entries in sources.items()}
+
+	pruned = 0
+	for gd in list(state.keys()):
+		if gd == "samples":
+			continue
+		known = source_addrs.get(gd)
+		for addr in list(state[gd].keys()):
+			if known is not None and addr in known:
+				continue
+			if hours_since(state[gd][addr].get("last_seen"), now) > STATE_PRUNE_HOURS:
+				del state[gd][addr]
+				pruned += 1
+		if known is None and not state[gd]:
+			del state[gd]
+	return pruned
+
+def prune_samples(samples, sources, now_ts):
+	cutoff = now_ts - SAMPLE_RETAIN_HOURS * 3600
+	pruned = 0
+	for gd in list(samples.keys()):
+		kept = [s for s in samples[gd] if s[0] >= cutoff]
+		pruned += len(samples[gd]) - len(kept)
+		if gd not in sources and not kept:
+			del samples[gd]
+			continue
+		samples[gd] = kept
+	return pruned
+
 def main():
 	ap = argparse.ArgumentParser(description=__doc__)
 	ap.add_argument("--query", default="xash3d-query", help="path to the xash3d-query binary")
@@ -254,6 +456,7 @@ def main():
 	ap.add_argument("--output", default="output", help="directory to write the publishable tree into")
 	ap.add_argument("--timeout", type=int, default=6, help="retry window in whole seconds (passed to xash3d-query -t); it re-sends every 2s for this long")
 	ap.add_argument("--grace-hours", type=float, default=48.0, help="keep a silent server published if it responded within this many hours")
+	ap.add_argument("--no-samples", action="store_true", help="probe and publish as usual, but do not record player-count samples. Pass this from any runner that cannot reach the whole list.")
 	args = ap.parse_args()
 
 	sources_dir = Path(args.sources)
@@ -270,104 +473,39 @@ def main():
 		return 2
 
 	state = load_state(state_path)
+	samples = state.setdefault("samples", {})
 	now = datetime.now(timezone.utc)
 	now_iso = now.replace(microsecond=0).isoformat()
-
-	total = sum(len(v) for v in sources.values())
-	live_now = 0
-	grace_kept = 0
-	print(f"probing {total} servers across {len(sources)} gamedirs  (timeout={args.timeout}s, grace={args.grace_hours}h)", flush=True)
-
-	samples = state.setdefault("samples", {})
 	now_ts = int(now.timestamp())
 
-	all_addrs = sorted({e["address"] for entries in sources.values() for e in entries if e.get("address")})
-	results = probe_all(args.query, all_addrs, args.timeout)
+	total = sum(len(v) for v in sources.values())
+	print(f"probing {total} servers across {len(sources)} gamedirs  (timeout={args.timeout}s, grace={args.grace_hours}h)", flush=True)
 
+	results = probe_all(args.query, build_targets(sources), args.timeout)
+
+	live_now = grace_kept = 0
 	gamedirs = []
 	for gamedir, entries in sources.items():
-		gd_state = state.setdefault(gamedir, {})
-		live_addrs = []
-		gd_players = 0
-		gd_responding = 0
+		live_addrs, players, responding, kept = probe_gamedir(
+			gamedir, entries, state.setdefault(gamedir, {}),
+			results, now, now_iso, args.grace_hours)
 
-		for entry in entries:
-			address = entry.get("address")
-			if not address:
-				continue
-			proto = int(entry.get("protocol") or PROTO_XASH)
-			prev = gd_state.setdefault(address, {})
-
-			result = results.get(address)
-
-			prev["last_attempt"] = now_iso
-			if result is not None:
-				prev["last_seen"] = now_iso
-				prev["last_ping_ms"] = result.get("ping")
-				# use the source's protocol, not the responder's
-				live_addrs.append((address, proto))
-				live_now += 1
-				numcl = int(result.get("numcl") or 0)
-				gd_players += numcl
-				gd_responding += 1
-				print(f"  [+] {gamedir:>12}  {address}  ping={result.get('ping')}ms  players={numcl}", flush=True)
-				continue
-
-			age = hours_since(prev.get("last_seen"), now)
-			if entry.get("force"):
-				live_addrs.append((address, proto))
-				print(f"  [F] {gamedir:>12}  {address}  silent now, published anyway (force)", flush=True)
-			elif age <= args.grace_hours:
-				live_addrs.append((address, proto))
-				grace_kept += 1
-				print(f"  [~] {gamedir:>12}  {address}  silent now, last seen {age:.1f}h ago (grace)", flush=True)
-			elif prev.get("last_seen"):
-				print(f"  [-] {gamedir:>12}  {address}  silent (last seen {age:.1f}h ago)", flush=True)
-			else:
-				print(f"  [-] {gamedir:>12}  {address}", flush=True)
-
+		live_now += responding
+		grace_kept += kept
 		gamedirs.append([gamedir, len(entries), len(live_addrs)])
 
 		# always emit a file so the URL is reachable even when 0 servers respond
-		live_addrs.sort()
 		out_path = write_output(output_dir, gamedir, live_addrs)
 		print(f"  -> {out_path}  ({len(live_addrs)} published)", flush=True)
 
-		if gd_responding > 0:
-			samples.setdefault(gamedir, []).append([now_ts, gd_players])
+		if responding > 0 and not args.no_samples:
+			samples.setdefault(gamedir, []).append([now_ts, players])
 
 	out_path = write_gamedirs(output_dir, gamedirs)
 	print(f"  -> {out_path}", flush=True)
 
-	source_addrs = {gd: {e["address"] for e in entries if e.get("address")} for gd, entries in sources.items()}
-	pruned = 0
-	for gd in list(state.keys()):
-		if gd == "samples":
-			continue
-		if gd not in source_addrs:
-			for addr, entry in list(state[gd].items()):
-				if hours_since(entry.get("last_seen"), now) > STATE_PRUNE_HOURS:
-					del state[gd][addr]
-					pruned += 1
-			if not state[gd]:
-				del state[gd]
-			continue
-		for addr in list(state[gd].keys()):
-			if addr in source_addrs[gd]:
-				continue
-			if hours_since(state[gd][addr].get("last_seen"), now) > STATE_PRUNE_HOURS:
-				del state[gd][addr]
-				pruned += 1
-
-	sample_cutoff = now_ts - SAMPLE_RETAIN_HOURS * 3600
-	samples_pruned = 0
-	for gd in list(samples.keys()):
-		kept = [s for s in samples[gd] if s[0] >= sample_cutoff]
-		samples_pruned += len(samples[gd]) - len(kept)
-		if gd not in sources and not kept:
-			del samples[gd]
-			continue
-		samples[gd] = kept
+	pruned = prune_state(state, sources, now)
+	samples_pruned = prune_samples(samples, sources, now_ts)
 
 	write_index(output_dir, sources, samples, now)
 	save_state(state_path, state)

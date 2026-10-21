@@ -13,16 +13,6 @@ contact  = "1033341124@qq.com"
 host     = "[XXH] CSDM:FFA Qqun:434673380"
 
 [[server]]
-address  = "119.29.13.60:27015"
-protocol = 49
-host     = "[Sanf] Zombie Shelter (Days:1)"
-
-[[server]]
-address  = "119.45.252.164:27015"
-protocol = 49
-host     = "[CN-G8] OLD PUBLIC Q：745991186"
-
-[[server]]
 address  = "119.91.201.9:27015"
 protocol = 49
 host     = "--[R]--[Zombie 5.0]--(CF Hero) Level EXP--616117100"
@@ -33,16 +23,6 @@ protocol = 49
 host     = "[FFA] Empty Protocol [CSDM]"
 
 [[server]]
-address  = "175.178.163.250:27020"
-protocol = 49
-host     = "CN.YsYTo 8v8 Qqun:370031524"
-
-[[server]]
-address  = "175.178.163.250:27021"
-protocol = 49
-host     = "CN.YsYTo AWP Qqun:370031524"
-
-[[server]]
 address  = "185.189.167.10:27015"
 protocol = 49
 host     = "r2d2 [yapb/arm64]"
@@ -51,11 +31,6 @@ host     = "r2d2 [yapb/arm64]"
 address  = "188.212.103.154:27015"
 protocol = 49
 host     = "* BIO.DINSCURT.COM | Zombie-Strike"
-
-[[server]]
-address  = "193.111.77.184:27031"
-protocol = 49
-host     = "[TR] Temel v2"
 
 [[server]]
 address  = "217.154.211.69:27025"
@@ -79,17 +54,17 @@ host     = "[IceEyes] CLASSIC PUBLIC (rank / vip system)"
 
 [[server]]
 address  = "82.77.209.165:27015"
-protocol = 49
+protocol = 48
 host     = "# LastCS.RO GunGame~AntiCheat~2xJump~SpawnProtect~1000FPS"
 
 [[server]]
 address  = "82.77.209.92:27015"
-protocol = 49
+protocol = 48
 host     = "# LastCS.RO Respawn~AntiCheat~2xJump~SpawnProtect~1000FPS"
 
 [[server]]
 address  = "82.77.209.95:27015"
-protocol = 49
+protocol = 48
 host     = "# LastCS.RO Zombie Swarm Defense~Knockback~Leap~1000FPS"
 
 [[server]]
@@ -101,13 +76,6 @@ host     = "# Cs.Lastcs.Ro#ClassicOldSchool~AntiCheat~WarmUp~SpawnProtect~1000FP
 address  = "89.207.221.227:27015"
 protocol = 49
 host     = "[CSVR] Noname Server"
-
-[[server]]
-address  = "47.96.116.126:27015"
-protocol = 49
-host     = "^3GM ^1Zombie ^2Meat ^55.0 ^6| Free Hook,VIP Qqun:622456398"
-
-
 
 # Added on 2026-06-06 from a follow-up master dump
 [[server]]
@@ -129,6 +97,12 @@ contact  = "tobiascarlossoares@gmail.com, discord:yukihira9319"
 host     = "Fantasy Gaming | Zombie Escape | FreeVIP+CSO+Events"
 
 [[server]]
+address  = "136.110.10.31:27015"
+protocol = 49
+contact  = "t.me/moha_kun , discord: mohmemes.dz"
+host     = "CloverXD | Zombie Escape Mod [ViP | XP | CSO]"
+
+[[server]]
 address  = "168.222.251.98:6610"
 protocol = 48
 contact  = "tilinasowaza5@gmail.com"
@@ -145,3 +119,82 @@ address = "193.111.78.158:27015"
 protocol = 49
 contact = "barkinayaz9@gmail.com"
 host = "[AYZ]Zombie Escape Reborn"
+
+[[server]]
+address  = "89.221.220.61:27017"
+contact  = "info@goldsrc.one"
+protocol = 48
+host     = "[GoldSrc.one] CrossPlay (register at discord.goldsrc.one)"
+
+[[server]]
+address = "104.234.65.245:27300"
+protocol = 48 
+contact = "csnightkillers@gmail.com, discord:gelado710_, discord:hevy7229"
+host = "[NIGHT KILLERS] | ZOMBIE PLAGUE | XP-LEVEL-FPS"
+
+[[server]]
+address  = "131.196.199.248:27015"
+protocol = 48
+contact  = "matheus.rondine@terra.com.br"
+host     = "zS.TeaM"
+
+[[server]]
+address = "178.63.182.108:5606"
+protocol = 48
+contact = "nsabkelkiyed@gmail.com"
+host = "Zombie Biohazard 6.3 [FREE VIP] + [Level Bank]"
+
+[[server]]
+address  = "9950x.mc5173.cn:27018"
+protocol = 48
+contact  = "1041936439@qq.com"
+host     = "Zombie Nightmare v1.0"
+
+[[server]]
+address  = "91.151.88.240:27015"
+protocol = 48
+contact  = "satinthebox@gmail.com"
+host   = "Dark Professional | Zombie Escape Updated! | FreeVIP+BOSS+Event"
+
+[[server]]
+address  = "132.243.253.240:2253"
+protocol = 48
+contact  = "rimage2024@gmail.com"
+host   = "the liche family | Zombie escape "
+
+[[server]]
+address = "81.181.244.5:27015"
+protocol = 48
+contact = "info@csomod.com"
+host = "[ZOMBIES]+[CSO MOD] [#1] CSOMOD.COM [since 2012]"
+
+[[server]]
+address  = "185.84.160.19:27015"
+protocol = 49
+contact  = "https://discord.gg/UzvgdvZ5Wy"
+host   = "Counter Strike Advanced Edition Classic"
+
+[[server]]
+address  = "185.84.160.19:27119"
+protocol = 49
+contact  = "https://discord.gg/UzvgdvZ5Wy"
+host   = "Counter Strike Advanced Edition Team DeathMatch"
+
+[[server]]
+address  = "185.84.160.19:27215"
+protocol = 49
+contact  = "https://discord.gg/UzvgdvZ5Wy"
+host   = "Counter Strike Advanced Edition DeathMatch"
+
+[[server]]
+address  = "94.156.11.186:27020"
+protocol = 48
+contact  = "Discord: vx.moha"
+host   = "Venom Xtreme | Zombie Escape | Naruto Shippuden"
+
+[[server]]
+address  = "89.39.161.172:27015"
+protocol = 48
+contact  = "matheus.rondine@terra.com.br"
+host     = "zS.TeaM zM"
+
